@@ -1,0 +1,14 @@
+<!-- Hidden UI: widgets cannot touch the clipboard directly, so we copy from here. -->
+<script>
+  window.onmessage = (event) => {
+    const msg = event.data.pluginMessage
+    if (!msg || msg.type !== 'copy') return
+    const el = document.createElement('textarea')
+    el.value = msg.text
+    document.body.appendChild(el)
+    el.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(el)
+    parent.postMessage({ pluginMessage: { type: 'copied', ok } }, '*')
+  }
+</script>

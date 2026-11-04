@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "lib": ["es2020"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react",
+    "jsxFactory": "figma.widget.h",
+    "jsxFragmentFactory": "figma.widget.Fragment",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "typeRoots": ["./node_modules/@figma"],
+    "types": ["plugin-typings", "widget-typings"]
+  },
+  "include": ["widget-src", "tests"]
+}
