@@ -5,6 +5,7 @@
   "scripts": {
     "build": "esbuild widget-src/code.tsx --bundle --outfile=dist/code.js --target=es2017",
     "watch": "npm run build -- --watch",
+    "setup": "powershell -ExecutionPolicy Bypass -File setup.ps1",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
