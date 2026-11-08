@@ -12,6 +12,7 @@ import {
   StatusId,
   STATUSES,
 } from './constants'
+import { base64, buildTile, encodePng, PaperId, PAPERS, TextureId, TEXTURES } from './paper'
 import { parseInline } from './markdown'
 import { formatTime, toMarkdown, toMarkdownAll } from './summary'
 
@@ -19,7 +20,6 @@ const { widget } = figma
 const {
   AutoLayout,
   Ellipse,
-  Image,
   Input,
   Rectangle,
   SVG,
@@ -32,13 +32,23 @@ const {
   waitForTask,
 } = widget
 
+const POINTER_OPTIONS = [
+  ...(['top', 'bottom', 'left', 'right'] as const).flatMap((side) =>
+    (['short', 'long'] as const).map((len) => ({
+      option: `${side}:${len}`,
+      label: `${POINTERS[side]} · ${len === 'short' ? 'Short' : 'Long'}`,
+    })),
+  ),
+  { option: 'none', label: POINTERS.none },
+]
+
 const AVATAR_COLORS = ['#FF8A7A', '#7AB8FF', '#B58CFF', '#5FD0A5', '#F2B84B']
 const colorFor = (name: string) =>
   AVATAR_COLORS[[...name].reduce((s, c) => s + c.charCodeAt(0), 0) % AVATAR_COLORS.length]
 
-function statusIcon(status: StatusId): string {
+const STATUS_ICONS: Record<StatusId, string> = (() => {
   const body: Record<StatusId, string> = {
-    open: '<circle cx="11" cy="11" r="11" fill="#EDEDED"/>',
+    open: '<circle cx="11" cy="11" r="10" fill="#fff" fill-opacity=".6" stroke="#000" stroke-opacity=".2" stroke-width="1.5"/>',
     progress:
       '<circle cx="11" cy="11" r="10" fill="#FFF4D6" stroke="#F59E0B" stroke-width="2"/>' +
       '<path d="M11 1a10 10 0 0 1 0 20z" fill="#F59E0B"/>',
@@ -49,13 +59,27 @@ function statusIcon(status: StatusId): string {
       '<circle cx="11" cy="11" r="11" fill="#EDEDED"/>' +
       '<path d="M7 11h8" stroke="#9AA3AB" stroke-width="2" stroke-linecap="round"/>',
   }
-  return `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">${body[status]}</svg>`
+  const wrap = (inner: string) =>
+    `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`
+  return {
+    open: wrap(body.open),
+    progress: wrap(body.progress),
+    resolved: wrap(body.resolved),
+    na: wrap(body.na),
+  }
+})()
+
+// 16px white line icons for the dark property-menu toolbar (icon-only keeps it narrow).
+const icon = (path: string) =>
+  `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">${path}</svg>`
+const ICONS = {
+  texture: icon('<rect x="2" y="2" width="12" height="12" rx="1"/><path d="M2 6h12M2 10h12M6 2v12M10 2v12"/>'),
+  link: icon('<path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 0 1 4.5 9l1-1"/>'),
+  next: icon('<path d="M3 8h10M9 4l4 4-4 4"/>'),
+  copy: icon('<rect x="5" y="5" width="8" height="9" rx="1"/><path d="M3 11V3h7"/>'),
 }
 
 function Avatar({ author, size }: { author: Author; size: number }) {
-  if (author.photoUrl) {
-    return <Image src={author.photoUrl} width={size} height={size} cornerRadius={size / 2} />
-  }
   return (
     <AutoLayout
       width={size}
@@ -72,19 +96,43 @@ function Avatar({ author, size }: { author: Author; size: number }) {
   )
 }
 
+type PaperFill = string | WidgetJSX.ImagePaint
+const fillCache = new Map<string, PaperFill>()
+function paperFill(paper: PaperId, texture: TextureId): PaperFill {
+  const color = PAPERS[paper].color
+  if (texture === 'none') return color
+  const key = `${paper}:${texture}`
+  const cached = fillCache.get(key)
+  if (cached) return cached
+  const tile = buildTile(color, texture)
+  const png = encodePng(tile.width, tile.height, tile.rgba)
+  const fill: PaperFill = {
+    type: 'image',
+    src: `data:image/png;base64,${base64(png)}`,
+    scaleMode: 'tile',
+    scalingFactor: 1,
+    imageSize: { width: tile.width, height: tile.height },
+  }
+  fillCache.set(key, fill)
+  return fill
+}
+
 function copyToClipboard(text: string): Promise<void> {
   return new Promise<void>((resolve) => {
-    figma.showUI(__html__, { visible: false })
-    figma.ui.postMessage({ type: 'copy', text })
+    let finished = false
     const done = (ok: boolean) => {
-      figma.notify(ok ? 'Summary copied' : 'Copy failed')
+      if (finished) return
+      finished = true
+      figma.notify(ok ? 'Copied' : 'Copy failed')
       figma.closePlugin()
       resolve()
     }
-    figma.ui.on('message', (msg: { type: string; ok: boolean }) => {
-      if (msg.type === 'copied') done(msg.ok)
+    figma.showUI(__html__, { visible: false })
+    figma.ui.on('message', (msg: { type: string; ok?: boolean }) => {
+      if (msg.type === 'ready') figma.ui.postMessage({ type: 'copy', text })
+      if (msg.type === 'copied') done(!!msg.ok)
     })
-    setTimeout(() => done(false), 3000)
+    setTimeout(() => done(false), 5000)
   })
 }
 
@@ -131,10 +179,13 @@ async function goToNextOpen(selfId: string) {
   figma.viewport.scrollAndZoomIntoView([next])
 }
 
-function collectPage(): AnnotationData[] {
-  if (!figma.widgetId) return []
-  const nodes = figma.currentPage.findWidgetNodesByWidgetId(figma.widgetId)
-  return nodes
+// Notes to export: every selected annotation when several are selected, otherwise just this one.
+function selectedNotes(): AnnotationData[] | null {
+  const picked = figma.currentPage.selection.filter(
+    (n): n is WidgetNode => n.type === 'WIDGET' && n.widgetId === figma.widgetId,
+  )
+  if (picked.length < 2) return null
+  return picked
     .sort((a, b) => a.y - b.y || a.x - b.x)
     .map((n) => {
       const s = n.widgetSyncedState as Partial<AnnotationData>
@@ -159,7 +210,9 @@ function AnnotationWidget() {
   const [author, setAuthor] = useSyncedState<Author | null>('author', null)
   const [createdAt, setCreatedAt] = useSyncedState('createdAt', 0)
   const [replies, setReplies] = useSyncedState<Reply[]>('replies', [])
-  const [showReplies, setShowReplies] = useSyncedState('showReplies', true)
+  const [paper, setPaper] = useSyncedState<PaperId>('paper', 'yellow')
+  const [texture, setTexture] = useSyncedState<TextureId>('texture', 'none')
+  const [showReplies, setShowReplies] = useSyncedState('showReplies', false)
   const [target, setTarget] = useSyncedState<LayerLink | null>('target', null)
   const [editing, setEditing] = useSyncedState('editing', false)
   const nodeId = useWidgetNodeId()
@@ -184,33 +237,34 @@ function AnnotationWidget() {
   usePropertyMenu(
     [
       { itemType: 'dropdown', propertyName: 'category', tooltip: 'Type', selectedOption: category, options: options(CATEGORIES) },
-      { itemType: 'dropdown', propertyName: 'status', tooltip: 'Status', selectedOption: status, options: options(STATUSES) },
-      { itemType: 'dropdown', propertyName: 'pointer', tooltip: 'Pointer', selectedOption: pointer, options: options(POINTERS) },
       {
         itemType: 'dropdown',
-        propertyName: 'pinLength',
-        tooltip: 'Pin length',
-        selectedOption: pinLength,
-        options: [
-          { option: 'short', label: 'Short' },
-          { option: 'long', label: 'Long' },
-        ],
+        propertyName: 'pointer',
+        tooltip: 'Pointer',
+        selectedOption: pointer === 'none' ? 'none' : `${pointer}:${pinLength}`,
+        options: POINTER_OPTIONS,
       },
+      { itemType: 'dropdown', propertyName: 'paper', tooltip: 'Paper', selectedOption: paper, options: options(PAPERS) },
       { itemType: 'separator' },
-      { itemType: 'toggle', propertyName: 'replies', tooltip: 'Replies', isToggled: showReplies },
-      { itemType: 'action', propertyName: 'link', tooltip: target ? 'Relink layer' : 'Link selected layer' },
-      ...(target ? [{ itemType: 'action' as const, propertyName: 'goTo', tooltip: 'Go to layer' }] : []),
-      { itemType: 'action', propertyName: 'next', tooltip: 'Next open note' },
-      { itemType: 'action', propertyName: 'copy', tooltip: 'Copy summary' },
-      { itemType: 'action', propertyName: 'copyAll', tooltip: 'Copy all on page' },
+      { itemType: 'action', propertyName: 'texture', tooltip: `Texture: ${TEXTURES[texture].label} (click to change)`, icon: ICONS.texture },
+      { itemType: 'action', propertyName: 'link', tooltip: target ? 'Relink layer' : 'Link selected layer', icon: ICONS.link },
+      { itemType: 'action', propertyName: 'next', tooltip: 'Next open note', icon: ICONS.next },
+      { itemType: 'action', propertyName: 'copy', tooltip: 'Copy summary (select several notes to copy them all)', icon: ICONS.copy },
     ],
     ({ propertyName, propertyValue }) => {
       switch (propertyName) {
         case 'category': return setCategory(propertyValue as CategoryId)
-        case 'status': return setStatus(propertyValue as StatusId)
-        case 'pointer': return setPointer(propertyValue as PointerSide)
-        case 'pinLength': return setPinLength(propertyValue as PinLength)
-        case 'replies': return setShowReplies(!showReplies)
+        case 'pointer': {
+          const [side, len] = (propertyValue as string).split(':')
+          setPointer(side as PointerSide)
+          if (len) setPinLength(len as PinLength)
+          return
+        }
+        case 'paper': return setPaper(propertyValue as PaperId)
+        case 'texture': {
+          const order = Object.keys(TEXTURES) as TextureId[]
+          return setTexture(order[(order.indexOf(texture) + 1) % order.length])
+        }
         case 'link': {
           const sel = figma.currentPage.selection[0]
           if (!sel) {
@@ -219,10 +273,11 @@ function AnnotationWidget() {
           }
           return setTarget({ id: sel.id, name: sel.name })
         }
-        case 'goTo': return target ? goToLayer(target.id) : undefined
         case 'next': return goToNextOpen(nodeId)
-        case 'copy': return copyToClipboard(toMarkdown(current()))
-        case 'copyAll': return copyToClipboard(toMarkdownAll(collectPage()))
+        case 'copy': {
+          const many = selectedNotes()
+          return copyToClipboard(many ? toMarkdownAll(many) : toMarkdown(current()))
+        }
       }
     },
   )
@@ -247,16 +302,15 @@ function AnnotationWidget() {
 
   const card = (
     <AutoLayout
+      key="card"
       name="Card"
       direction="vertical"
       width={360}
       padding={{ vertical: 16, horizontal: 20 }}
       spacing={12}
-      cornerRadius={8}
-      fill="#FFFFFF"
-      stroke={color}
-      strokeWidth={2}
-      effect={{ type: 'drop-shadow', color: '#00000026', offset: { x: 0, y: 4 }, blur: 12 }}
+      cornerRadius={4}
+      fill={paperFill(paper, texture)}
+      effect={{ type: 'drop-shadow', color: '#00000033', offset: { x: 0, y: 3 }, blur: 6 }}
       opacity={status === 'resolved' ? 0.7 : 1}
     >
       <AutoLayout width="fill-parent" verticalAlignItems="center">
@@ -267,9 +321,12 @@ function AnnotationWidget() {
         </AutoLayout>
         <AutoLayout width="fill-parent" height={1} />
         <SVG
-          src={statusIcon(status)}
-          tooltip={STATUSES[status].label}
-          onClick={() => setStatus(status === 'resolved' ? 'open' : 'resolved')}
+          src={STATUS_ICONS[status]}
+          tooltip={`${STATUSES[status].label} (click to change)`}
+          onClick={() => {
+            const order = Object.keys(STATUSES) as StatusId[]
+            setStatus(order[(order.indexOf(status) + 1) % order.length])
+          }}
         />
       </AutoLayout>
 
@@ -277,7 +334,7 @@ function AnnotationWidget() {
         <Input
           value={text}
           placeholder="Write a note... (**bold**, *italic*, `code`)"
-          placeholderProps={{ fill: '#A0A7AE' }}
+          placeholderProps={{ fill: '#00000066' }}
           onTextEditEnd={(e) => {
             setText(e.characters)
             setEditing(false)
@@ -297,7 +354,7 @@ function AnnotationWidget() {
         <AutoLayout
           padding={{ vertical: 3, horizontal: 8 }}
           cornerRadius={4}
-          fill="#F1F3F5"
+          fill="#0000000F"
           tooltip="Go to layer"
           onClick={() => waitForTask(goToLayer(target.id))}
         >
@@ -309,13 +366,23 @@ function AnnotationWidget() {
         <AutoLayout spacing={6} verticalAlignItems="center">
           <Avatar author={author} size={30} />
           <Text fontSize={13} fontWeight={700} fill="#111111">{author.name}</Text>
-          <Text fontSize={12} fill="#8A96A3">{formatTime(createdAt)}</Text>
+          <Text fontSize={12} fill="#00000080">{formatTime(createdAt)}</Text>
         </AutoLayout>
       )}
 
+      <Text
+        fontSize={12}
+        fill="#00000099"
+        textDecoration="underline"
+        tooltip={showReplies ? 'Hide replies' : 'Show replies'}
+        onClick={() => setShowReplies(!showReplies)}
+      >
+        {replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'Reply'}
+      </Text>
+
       {showReplies && (
         <AutoLayout direction="vertical" width="fill-parent" spacing={10}>
-          <Rectangle width="fill-parent" height={1} fill="#E6E9ED" />
+          <Rectangle width="fill-parent" height={1} fill="#0000001A" />
           {replies.map((r) => (
             <AutoLayout key={r.id} spacing={8} width="fill-parent">
               <Avatar author={r.author} size={22} />
