@@ -2,6 +2,8 @@
 
 A Figma/FigJam widget for design annotations: categorized notes, a pointer line, status, threaded replies, Markdown formatting, layer links, and copy-to-Markdown export.
 
+Website: [pinnote.erikdarmawan.com](https://pinnote.erikdarmawan.com). Built by [Erik Agus Darmawan](https://erikdarmawan.com). Pinnote is an independent project and is not affiliated with Figma.
+
 ## Develop
 
 Quick start: run `.setup.ps1` (or `npm run setup`), then import `manifest.json` in Figma.
