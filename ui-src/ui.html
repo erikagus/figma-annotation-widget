@@ -1,26 +1,58 @@
-<!-- Hidden UI: widgets cannot touch the clipboard directly, so we copy from here. -->
+<!-- Small panel used only to reach the clipboard. A hidden iframe has no focus and no user click,
+     so browsers refuse to copy from it. Here the panel is visible: we try to copy at once, and if the
+     browser still refuses, the Copy button (a real click) always works. -->
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font: 12px/16px Inter, system-ui, sans-serif; color: #1b2b24; }
+  #status { margin-bottom: 8px; font-weight: 600; }
+  textarea { width: 100%; height: 76px; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; font: 11px/15px ui-monospace, Consolas, monospace; resize: none; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+  #hint { color: #6b7e94; }
+  button { padding: 6px 14px; border: 0; border-radius: 6px; background: #1f4d3a; color: #fff; font: 600 12px Inter, system-ui, sans-serif; cursor: pointer; }
+</style>
+<div id="status">Copying summary...</div>
+<textarea id="text" readonly></textarea>
+<div class="row"><span id="hint"></span><button id="copy" type="button">Copy</button></div>
 <script>
-  async function copy(text) {
+  const status = document.getElementById('status')
+  const area = document.getElementById('text')
+  const hint = document.getElementById('hint')
+
+  async function copy() {
     try {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(area.value)
       return true
     } catch (e) {
-      const el = document.createElement('textarea')
-      el.value = text
-      document.body.appendChild(el)
-      el.focus()
-      el.select()
-      const ok = document.execCommand('copy')
-      document.body.removeChild(el)
-      return ok
+      area.focus()
+      area.select()
+      try {
+        return document.execCommand('copy')
+      } catch (e2) {
+        return false
+      }
     }
   }
 
-  window.onmessage = async (event) => {
+  async function run() {
+    const ok = await copy()
+    if (ok) {
+      status.textContent = 'Copied'
+      parent.postMessage({ pluginMessage: { type: 'copied' } }, '*')
+    } else {
+      status.textContent = 'Press Copy, or Ctrl/Cmd+C'
+      hint.textContent = 'Text is selected'
+      area.focus()
+      area.select()
+    }
+  }
+
+  document.getElementById('copy').addEventListener('click', run)
+
+  window.onmessage = (event) => {
     const msg = event.data.pluginMessage
     if (!msg || msg.type !== 'copy') return
-    const ok = await copy(msg.text)
-    parent.postMessage({ pluginMessage: { type: 'copied', ok } }, '*')
+    area.value = msg.text
+    run()
   }
 
   // Tell the widget the page is loaded; messages sent earlier would be lost.
