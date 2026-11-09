@@ -1,4 +1,4 @@
-# Figma Annotation Widget
+# Pinnote
 
 A Figma/FigJam widget for design annotations: categorized notes, a pointer line, status, threaded replies, Markdown formatting, layer links, and copy-to-Markdown export.
 
