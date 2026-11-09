@@ -120,20 +120,20 @@ function paperFill(paper: PaperId, texture: TextureId): PaperFill {
 // The panel must be visible: a hidden iframe has no focus or user click, so the browser refuses to copy from it.
 function copyToClipboard(text: string): Promise<void> {
   return new Promise<void>((resolve) => {
+    // After a copy the panel stays open so the user can still press "Save as .md"; closing it ends the flow.
     let finished = false
-    const finish = (copied: boolean) => {
+    const finish = () => {
       if (finished) return
       finished = true
-      if (copied) figma.notify('Copied')
       figma.closePlugin()
       resolve()
     }
     figma.showUI(__html__, { width: 300, height: 176, title: 'Copy summary' })
     figma.ui.on('message', (msg: { type: string }) => {
       if (msg.type === 'ready') figma.ui.postMessage({ type: 'copy', text })
-      if (msg.type === 'copied') finish(true)
+      if (msg.type === 'copied') figma.notify('Copied')
     })
-    figma.on('close', () => finish(false))
+    figma.on('close', finish)
   })
 }
 
